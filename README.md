@@ -74,6 +74,30 @@ uv run bot.py
 
 > 💡 First run note: The initial startup may take ~20 seconds as Pipecat downloads required models and imports.
 
+## Deployment
+
+### Option 1: Local with uv (recommended)
+
+The easiest way to run the bot. [uv](https://docs.astral.sh/uv/getting-started/installation/) handles virtual environments, dependency resolution, and execution in a single tool — no need to manually manage `venv` or `pip`.
+
+```bash
+# 1. Install dependencies
+uv sync
+
+# 2. Install Playwright browsers (only needed if using the Playwright adapter)
+uv run playwright install chromium
+
+# 3. Configure environment
+cp env.example .env
+# Edit .env with your API keys and credentials
+
+# 4. Run the bot
+uv run bot.py
+```
+
+Open http://localhost:7860 in your browser and click **Connect**.
+
+I ended up not using Docker as something was going wrong when trying to connect to the UI. Due to time limitations I didn't investigate any further.
 
 
 ## Expectations & Deliverables
