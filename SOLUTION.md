@@ -11,12 +11,15 @@ The bot greets the patient, asks for their name and date of birth, looks them up
 I noticed the starter repo had Playwright already set up for browser automation, but I thought talking to Healthie's GraphQL API directly would be way faster and more reliable. Instead of picking one and throwing the other away, I went with a ports-and-adapters approach so both could coexist behind the same interface.
 
 ```
-bot.py                          Wires everything together
+bot.py                          Entry point
 prosper/
   agent/
-    prompts.py                  System prompt
-    tools.py                    Tool schemas + handlers
-    fillers.py                  Filler phrases for slow tool calls
+    shared/
+      fillers.py                Filler phrases for slow tool calls
+      validation.py             Date/time parsing helpers
+    v1/
+      prompts.py                System prompt
+      tools.py                  Tool schemas + handlers
   ehr/
     ports.py                    Interfaces (AbstractEHRService, EHRClientProtocol)
     service.py                  Business logic on top of the raw client
@@ -34,6 +37,10 @@ prosper/
 The idea is simple: `domain/` has no idea Healthie exists, `service.py` only talks to the `EHRClientProtocol` interface, and the concrete adapters (`graphql.py`, `playwright.py`, `fake.py`) are the only things that know how to actually reach Healthie. This also means I can test all the business logic with `FakeEHRClient` and never touch the network.
 
 I also intentionally didn't follow the README's suggestion of putting everything in a single `healthie.py` file. It would have been simpler, but it would have mixed concerns that I wanted to keep separate -- the service logic (DOB filtering, error normalization) shouldn't live next to HTTP calls or Playwright selectors. The same functions are still accessible through the tool handlers and service layer, just better organized.
+
+### How the pipeline fits together
+
+`bot.py` builds a Pipecat pipeline: ElevenLabs STT captures speech, feeds it to the OpenAI LLM, and the LLM's output goes through the filler processor and then ElevenLabs TTS back to the caller. The three tools (`find_patient`, `create_appointment`, `cancel_appointment`) are registered on the LLM via OpenAI's function-calling API with JSON schemas that describe each tool's parameters. When the model decides to call a tool, Pipecat intercepts the function call, runs the corresponding handler in `tools.py` (which delegates to `EHRService`), and feeds the structured result back into the LLM context so it can formulate a natural-language response. The caller never knows a tool call happened -- they just hear the bot pause briefly and then respond with the result.
 
 ## Decisions and why I made them
 
@@ -144,3 +151,22 @@ Going further, an LLM-as-judge approach could score conversations on correctness
 ### On security
 
 For a healthcare product, there are a few things I'd need before going live: PII redaction in logs (right now patient names and DOBs show up at INFO level), a structured audit trail for every appointment operation (HIPAA), and proper secret management (vault instead of `.env`).
+
+### On conversation control: Pipecat Flows
+
+The current bot encodes the entire conversation flow in a single system prompt. It works well in practice -- the tool schemas constrain what the model can do, and every handler validates its inputs. But there are no structural guarantees: the LLM could theoretically skip the patient-lookup step and jump straight to booking, or call `cancel_appointment` before identifying the patient.
+
+I didn't have enough time to dive deep into Pipecat's more advanced features, and I preferred to keep a straightforward but robust implementation rather than overcomplicate things. That said, Pipecat has a **Pipecat Flows** module (`pipecat-flows`) that looks like a natural upgrade path for this kind of problem. It replaces the monolithic prompt with a node-based conversation graph where each node has its own task message, its own set of available functions, and explicit transitions to the next node. The LLM still has full conversational freedom *within* each node (handling clarifications, small talk, partial answers), but it can only call the functions that exist in the current node -- you literally can't book an appointment from the greeting node.
+
+A few things that would make it worth the investment:
+
+- **Structural safety**: Each node only exposes the functions relevant to that phase. No amount of prompt engineering can make the model call a tool that isn't registered in the current node.
+- **Context resets**: Pipecat Flows supports `RESET_WITH_SUMMARY` between phases, which would help with context rot in longer conversations -- after patient lookup, summarize and start fresh for scheduling.
+- **Interruption protection**: Write operations like `create_appointment` could be marked as non-cancellable, so user interruptions don't leave half-completed bookings.
+- **Global functions**: Things like warm transfer ("I'd like to speak with a person") could be registered once and available in every node, without repeating them in each prompt section.
+
+The EHR layer, domain models, and tool handler logic wouldn't need to change -- it's mostly a matter of splitting the system prompt into per-node task messages and wiring up the transitions. Something I'd definitely explore for the next iteration.
+
+### On observability
+
+For production, I'd add OpenTelemetry tracing. Each EHR call and tool invocation would produce a span, giving full visibility into conversation flow timing and error rates. Pipecat already has OpenTelemetry integration points -- it's mainly a matter of wiring them up.
