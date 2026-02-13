@@ -82,7 +82,7 @@ class TestCreateAndCancelAppointment:
         assert appointment.time == request.time
         assert appointment.status == AppointmentStatus.SCHEDULED
 
-        cancelled = await client.cancel_appointment(appointment.appointment_id)
+        cancelled = await client.cancel_appointment(patient_id, request.date, request.time)
 
         assert cancelled.status == AppointmentStatus.CANCELLED
 

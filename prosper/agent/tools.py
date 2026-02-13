@@ -71,12 +71,20 @@ CANCEL_APPOINTMENT_SCHEMA = FunctionSchema(
         "has explicitly confirmed they want to cancel."
     ),
     properties={
-        "appointment_id": {
+        "patient_id": {
             "type": "string",
-            "description": "The appointment ID to cancel.",
+            "description": "The patient's unique ID from the find_patient result.",
+        },
+        "date": {
+            "type": "string",
+            "description": "The appointment date in ISO 8601 format (YYYY-MM-DD).",
+        },
+        "time": {
+            "type": "string",
+            "description": "The appointment time in 24-hour format (HH:MM).",
         },
     },
-    required=["appointment_id"],
+    required=["patient_id", "date", "time"],
 )
 
 
@@ -204,14 +212,29 @@ class ToolHandlers:
             )
 
     async def handle_cancel_appointment(self, params: FunctionCallParams) -> None:
-        appointment_id: str = params.arguments.get("appointment_id", "")
+        patient_id: str = params.arguments.get("patient_id", "")
+        date_str: str = params.arguments.get("date", "")
+        time_str: str = params.arguments.get("time", "")
 
-        if not appointment_id:
+        if not patient_id or not date_str or not time_str:
             await params.result_callback(
                 {
                     "success": False,
                     "error": True,
-                    "message": "'appointment_id' is required.",
+                    "message": "'patient_id', 'date', and 'time' are all required.",
+                }
+            )
+            return
+
+        date_val, date_err = _parse_iso_date(date_str, "date")
+        time_val, time_err = _parse_iso_time(time_str, "time")
+        err = date_err or time_err
+        if err or date_val is None or time_val is None:
+            await params.result_callback(
+                {
+                    "success": False,
+                    "error": True,
+                    "message": err or "Invalid date/time format.",
                 }
             )
             return
@@ -219,7 +242,7 @@ class ToolHandlers:
         logger.debug("Tool call: cancel_appointment")
 
         try:
-            appointment = await self._ehr.cancel_appointment(appointment_id)
+            appointment = await self._ehr.cancel_appointment(patient_id, date_val, time_val)
 
             await params.result_callback(
                 {

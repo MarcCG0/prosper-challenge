@@ -80,6 +80,10 @@ I treated all appointment times as clinic-local (`America/New_York` by default, 
 
 I've been bitten by timezone bugs before, so I wanted to be explicit about it everywhere rather than hoping UTC conversions work out.
 
+### Date inference: injecting today's date into the prompt
+
+During testing I noticed the bot would interpret "March 14 at 12 PM" as a past date because the LLM had no notion of "today." The fix was simple: `build_system_prompt` now injects the current date (`Today's date is 2026-02-13.`) and an explicit rule ("When the patient mentions a date without a year, assume the next upcoming occurrence of that date"). This way the model always resolves ambiguous dates to the future.
+
 ### Error handling
 
 I built a small exception hierarchy (`EHRError` -> `EHRUnavailableError`, `AppointmentCreationError`, `AppointmentCancellationError`) so that errors carry context (which patient, what went wrong) rather than just a generic message.

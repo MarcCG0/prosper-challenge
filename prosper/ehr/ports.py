@@ -39,11 +39,15 @@ class AbstractEHRService(ABC):
         """
 
     @abstractmethod
-    async def cancel_appointment(self, appointment_id: str) -> Appointment:
+    async def cancel_appointment(
+        self, patient_id: str, date: dt.date, time: dt.time
+    ) -> Appointment:
         """Cancel an existing appointment.
 
         Args:
-            appointment_id: The appointment's unique ID.
+            patient_id: The patient's unique ID.
+            date: The appointment date.
+            time: The appointment time.
 
         Returns:
             The cancelled appointment.
@@ -77,7 +81,9 @@ class EHRClientProtocol(Protocol):
         """Create an appointment."""
         ...
 
-    async def cancel_appointment(self, appointment_id: str) -> Appointment:
+    async def cancel_appointment(
+        self, patient_id: str, date: dt.date, time: dt.time
+    ) -> Appointment:
         """Cancel an appointment."""
         ...
 

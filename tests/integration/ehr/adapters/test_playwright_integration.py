@@ -75,8 +75,8 @@ class TestCreateAndCancelAppointment:
 
         request = AppointmentRequest(
             patient_id=patient_id,
-            date=dt.date(2027, 7, 20),
-            time=dt.time(11, 0),
+            date=dt.date(2026, 9, 15),
+            time=dt.time(14, 0),
         )
         appointment = await client.create_appointment(request)
 
@@ -85,11 +85,9 @@ class TestCreateAndCancelAppointment:
         assert appointment.time == request.time
         assert appointment.status == AppointmentStatus.SCHEDULED
 
-        # Cancel the appointment we just created (if ID was captured)
-        if appointment.appointment_id != "unknown":
-            cancelled = await client.cancel_appointment(appointment.appointment_id)
+        cancelled = await client.cancel_appointment(patient_id, request.date, request.time)
 
-            assert cancelled.status == AppointmentStatus.CANCELLED
+        assert cancelled.status == AppointmentStatus.CANCELLED
 
 
 class TestClose:

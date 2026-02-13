@@ -1,7 +1,8 @@
-import re
+import datetime as dt
+from typing import Any
 
 from loguru import logger
-from playwright.async_api import Browser, Page, async_playwright
+from playwright.async_api import Browser, Page, Playwright, Response, async_playwright
 
 from prosper.domain.exceptions import (
     AppointmentCancellationError,
@@ -47,6 +48,11 @@ _SEL_APPT_DETAIL_CLOSE = '[data-testid="asideModalCloseButton"]'
 _SEL_APPT_STATUS = '[data-testid="appointment-status"]'
 
 
+def _date_to_short(date: dt.date) -> str:
+    """Convert ``date(2026, 3, 12)`` → ``"Mar 12, 2026"`` for Healthie's list display."""
+    return f"{date.strftime('%b')} {date.day}, {date.year}"
+
+
 class PlaywrightHealthieClient:
     """Healthie client via Playwright browser automation."""
 
@@ -61,7 +67,7 @@ class PlaywrightHealthieClient:
         self._password = password
         self._base_url = base_url
         self._headless = headless
-        self._playwright = None
+        self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._page: Page | None = None
 
@@ -192,7 +198,12 @@ class PlaywrightHealthieClient:
 
             submit_btn = page.locator(_SEL_MODAL_SUBMIT)
             await submit_btn.wait_for(state="visible", timeout=_SUBMIT_TIMEOUT_MS)
-            await submit_btn.click()
+
+            async with page.expect_response(
+                "**/graphql", timeout=_SUBMIT_TIMEOUT_MS
+            ) as response_info:
+                await submit_btn.click()
+            graphql_response: Response = await response_info.value
 
             modal = page.locator(_SEL_APPT_MODAL)
             for _ in range(_MAX_POLL_ATTEMPTS):
@@ -211,11 +222,7 @@ class PlaywrightHealthieClient:
                     patient_id=request.patient_id,
                 )
 
-            appointment_id = "unknown"
-            current_url = page.url
-            url_id_match = re.search(r"/appointments?/(\d+)", current_url)
-            if url_id_match:
-                appointment_id = url_id_match.group(1)
+            appointment_id = await self._parse_appointment_id_from_response(graphql_response)
 
             return Appointment(
                 appointment_id=appointment_id,
@@ -231,25 +238,48 @@ class PlaywrightHealthieClient:
             logger.error("Error creating appointment: {}", exc)
             raise AppointmentCreationError(reason=str(exc), patient_id=request.patient_id) from exc
 
-    async def cancel_appointment(self, appointment_id: str) -> Appointment:
+    async def cancel_appointment(
+        self, patient_id: str, date: dt.date, time: dt.time
+    ) -> Appointment:
         """Cancel an appointment via the Healthie UI.
 
-        Opens the appointment detail modal (by finding the appointment on the
-        patient profile or navigating directly), sets the status dropdown to
-        "Cancelled", and clicks "Save changes".
+        Navigates to the patient profile, finds the appointment matching
+        the given date and time, sets the status to "Cancelled", and saves.
         """
         page = await self._ensure_logged_in()
 
         try:
-            # If we're already on a patient profile, try to find the appointment
-            # in the current list; otherwise we need to open the modal some other way.
-            # The most reliable approach: click through appointment list items on
-            # the current page until we find the one with the matching ID.
-            modal_opened = await self._open_appointment_modal(page, appointment_id)
-            if not modal_opened:
+            # Navigate to the patient profile
+            await page.goto(
+                f"{self._base_url}/users/{patient_id}",
+                wait_until="commit",
+            )
+            await page.wait_for_timeout(_POST_NAV_DELAY_MS)
+
+            # Wait for the appointment list to load
+            items = page.locator(_SEL_APPT_PREVIEW_ITEM)
+            await items.first.wait_for(state="visible", timeout=_ELEMENT_TIMEOUT_MS)
+
+            # Format target date/time for text matching
+            target_date_str = _date_to_short(date)
+            target_time_str = time_to_12h(time)
+
+            # Find the matching appointment item
+            count = await items.count()
+            matched = False
+            for i in range(count):
+                item = items.nth(i)
+                text = await item.inner_text()
+                if target_date_str in text and target_time_str in text:
+                    await item.click()
+                    await page.wait_for_timeout(_MODAL_OPEN_DELAY_MS)
+                    matched = True
+                    break
+
+            if not matched:
                 raise AppointmentCancellationError(
                     reason="Could not find appointment in the UI",
-                    appointment_id=appointment_id,
+                    patient_id=patient_id,
                 )
 
             # Set status to "Cancelled" via the react-select dropdown.
@@ -257,8 +287,6 @@ class PlaywrightHealthieClient:
             status_section = modal.locator(_SEL_APPT_STATUS)
             await status_section.wait_for(state="visible", timeout=_ELEMENT_TIMEOUT_MS)
 
-            # Open the status dropdown via JS (the input is inside the
-            # modal's scroll container and Playwright can't click it normally).
             await page.evaluate("""() => {
                 const input = document.querySelector('#pm_status');
                 input.focus();
@@ -266,9 +294,6 @@ class PlaywrightHealthieClient:
             }""")
             await page.wait_for_timeout(_SELECT_OPEN_DELAY_MS)
 
-            # Select "Cancelled" — use keyboard to avoid viewport issues
-            # with the dropdown menu as well.  "Cancelled" is the 2nd option
-            # (Occurred, Cancelled, Late Cancellation, No-Show, Re-Scheduled).
             status_input = status_section.locator("input#pm_status")
             await status_input.press("ArrowDown")
             await page.wait_for_timeout(_SELECT_ARROW_DELAY_MS)
@@ -277,7 +302,6 @@ class PlaywrightHealthieClient:
             await status_input.press("Enter")
             await page.wait_for_timeout(_SELECT_OPEN_DELAY_MS)
 
-            # Click "Save changes" via JS (same viewport issue).
             await page.evaluate("""() => {
                 const popup = document.querySelector('[data-testid="appointment-detail-popup"]');
                 const btn = popup.querySelector('[data-testid="primaryButton"]');
@@ -285,31 +309,31 @@ class PlaywrightHealthieClient:
             }""")
             await page.wait_for_timeout(_SELECT_OPEN_DELAY_MS)
 
-            # Wait for the modal to close or show a success indication.
             for _ in range(_MAX_POLL_ATTEMPTS):
                 await page.wait_for_timeout(_POLL_INTERVAL_MS)
                 if await modal.count() == 0:
                     break
             else:
-                # Modal didn't close — check if save succeeded anyway
                 logger.warning(
                     "Appointment detail modal did not close after saving, "
                     "but the status change may have succeeded"
                 )
 
-            logger.info("Appointment {} cancelled via UI", appointment_id)
+            logger.info(
+                "Appointment for patient {} on {} at {} cancelled via UI", patient_id, date, time
+            )
             return Appointment(
-                appointment_id=appointment_id,
-                patient_id="",
+                appointment_id="unknown",
+                patient_id=patient_id,
+                date=date,
+                time=time,
                 status=AppointmentStatus.CANCELLED,
             )
 
         except AppointmentCancellationError:
             raise
         except Exception as exc:
-            raise AppointmentCancellationError(
-                reason=str(exc), appointment_id=appointment_id
-            ) from exc
+            raise AppointmentCancellationError(reason=str(exc), patient_id=patient_id) from exc
 
     async def health_check(self) -> bool:
         try:
@@ -381,6 +405,21 @@ class PlaywrightHealthieClient:
         await input_el.press("Enter")
         await page.wait_for_timeout(_SELECT_OPEN_DELAY_MS)
 
+    async def _parse_appointment_id_from_response(self, response: Response) -> str:
+        """Extract the appointment ID from a createAppointment GraphQL response."""
+        try:
+            body: dict[str, Any] = await response.json()
+            data: dict[str, Any] = body.get("data") or {}
+            create_result: dict[str, Any] = data.get("createAppointment") or {}
+            appt: dict[str, Any] = create_result.get("appointment") or {}
+            appt_id: str | None = appt.get("id")
+            if appt_id:
+                return str(appt_id)
+        except Exception:
+            pass
+        logger.warning("Could not extract appointment ID after creation")
+        return "unknown"
+
     async def _extract_appointment_id_from_modal(self, page: Page) -> str | None:
         """Extract the numeric appointment ID from the open detail modal.
 
@@ -401,28 +440,3 @@ class PlaywrightHealthieClient:
             # Format: "appointment-619123263"
             return testids[0].split("-", 1)[1]
         return None
-
-    async def _open_appointment_modal(self, page: Page, appointment_id: str) -> bool:
-        """Open the appointment detail modal for the given appointment ID.
-
-        Clicks through each appointment preview item on the current page until
-        the modal with the matching appointment ID is found.
-        """
-        items = page.locator(_SEL_APPT_PREVIEW_ITEM)
-        count = await items.count()
-
-        for i in range(count):
-            await items.nth(i).click()
-            await page.wait_for_timeout(_MODAL_OPEN_DELAY_MS)
-
-            found_id = await self._extract_appointment_id_from_modal(page)
-            if found_id == appointment_id:
-                return True
-
-            # Not the right appointment — close the modal and try next.
-            close_btn = page.locator(_SEL_APPT_DETAIL_CLOSE)
-            if await close_btn.count() > 0:
-                await close_btn.click()
-                await page.wait_for_timeout(_SELECT_OPEN_DELAY_MS)
-
-        return False

@@ -1,3 +1,5 @@
+import datetime as dt
+
 from prosper.domain.models import Appointment, AppointmentRequest, AppointmentStatus, Patient
 
 
@@ -15,7 +17,7 @@ class FakeEHRClient:
     def __init__(self) -> None:
         self.patients: list[Patient] = []
         self.created: list[AppointmentRequest] = []
-        self.cancelled: list[str] = []
+        self.cancelled: list[tuple[str, dt.date, dt.time]] = []
         self.closed: bool = False
 
         self.search_error: Exception | None = None
@@ -39,13 +41,17 @@ class FakeEHRClient:
             status=AppointmentStatus.SCHEDULED,
         )
 
-    async def cancel_appointment(self, appointment_id: str) -> Appointment:
+    async def cancel_appointment(
+        self, patient_id: str, date: dt.date, time: dt.time
+    ) -> Appointment:
         if self.cancel_error:
             raise self.cancel_error
-        self.cancelled.append(appointment_id)
+        self.cancelled.append((patient_id, date, time))
         return Appointment(
-            appointment_id=appointment_id,
-            patient_id="",
+            appointment_id="cancelled-1",
+            patient_id=patient_id,
+            date=date,
+            time=time,
             status=AppointmentStatus.CANCELLED,
         )
 
