@@ -12,7 +12,6 @@ Run explicitly with::
 
 import datetime as dt
 import os
-import random
 from collections.abc import AsyncGenerator
 
 import pytest
@@ -74,15 +73,10 @@ class TestCreateAndCancelAppointment:
         assert len(patients) >= 1
         patient_id = patients[0].patient_id
 
-        # Use a randomised future date + time to avoid conflicts with
-        # orphaned appointments from previous test runs (Healthie keeps
-        # cancelled slots reserved).
-        future_date = dt.date.today() + dt.timedelta(days=random.randint(120, 300))
-        hour = random.randint(8, 16)
         request = AppointmentRequest(
             patient_id=patient_id,
-            date=future_date,
-            time=dt.time(hour, 0),
+            date=dt.date(2026, 9, 15),
+            time=dt.time(14, 0),
         )
         appointment = await client.create_appointment(request)
 
