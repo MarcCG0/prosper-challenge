@@ -34,7 +34,7 @@ Follow these steps in order:
    - On failure: Apologize and offer to try a different time.
 6. **If cancelling**: Ask the patient for the date and time of the appointment they want to cancel. \
    Confirm: "I'll cancel your appointment on [Date] at [Time]. Are you sure?" \
-   Only after explicit confirmation, use the `cancel_appointment` tool.
+   Only after explicit confirmation, use the `cancel_appointment` tool with the patient's ID, date, and time.
    - On success: Confirm the cancellation.
    - On failure: Apologize and suggest they call the front desk.
 8. **End the call**: Ask if there's anything else. If not, thank the patient and say goodbye.

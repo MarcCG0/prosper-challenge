@@ -47,7 +47,7 @@ class HealthieConfig(BaseSettings):
     password: str
     base_url: str = "https://secure.gethealthie.com"
     api_url: str = "https://api.gethealthie.com/graphql"
-    adapter: EHRAdapter = EHRAdapter.GRAPHQL
+    adapter: EHRAdapter = EHRAdapter.PLAYWRIGHT
     headless: bool = True
 
 

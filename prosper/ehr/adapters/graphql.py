@@ -87,6 +87,16 @@ mutation updateAppointment($id: ID!, $pm_status: String) {
 }
 """
 
+_APPOINTMENTS_QUERY = """
+query appointments($user_id: String, $filter: String) {
+  appointments(user_id: $user_id, filter: $filter) {
+    id
+    date
+    pm_status
+  }
+}
+"""
+
 _HEALTH_CHECK_QUERY = """
 query healthCheck {
   users(keywords: "", should_paginate: true, offset: 0) {
@@ -254,35 +264,58 @@ class GraphQLHealthieClient:
             status=AppointmentStatus.SCHEDULED,
         )
 
-    async def cancel_appointment(self, appointment_id: str) -> Appointment:
+    async def cancel_appointment(
+        self, patient_id: str, date: dt.date, time: dt.time
+    ) -> Appointment:
+        # 1. Query appointments for the patient
         data: dict[str, Any] = await self._graphql(
-            _UPDATE_APPOINTMENT_MUTATION,
-            {"id": appointment_id, "pm_status": "Cancelled"},
+            _APPOINTMENTS_QUERY,
+            {"user_id": patient_id, "filter": "upcoming"},
         )
 
-        result: dict[str, Any] = data.get("data", {}).get("updateAppointment", {})
+        raw_appts: list[dict[str, Any]] = data.get("data", {}).get("appointments") or []
+
+        # 2. Find the appointment matching the target date/time
+        target_dt = dt.datetime.combine(date, time, tzinfo=self._clinic_tz)
+        matched_id: str | None = None
+        for appt in raw_appts:
+            raw_date: str = appt.get("date", "")
+            try:
+                aware_dt = dt.datetime.strptime(raw_date, "%Y-%m-%d %H:%M:%S %z")
+                local_dt = aware_dt.astimezone(self._clinic_tz)
+                appt_dt = local_dt.replace(second=0, microsecond=0)
+            except ValueError:
+                continue
+            if appt_dt == target_dt:
+                matched_id = str(appt["id"])
+                break
+
+        if matched_id is None:
+            raise AppointmentCancellationError(
+                reason="No appointment found for the given patient, date, and time",
+                patient_id=patient_id,
+            )
+
+        # 3. Cancel the matched appointment
+        update_data: dict[str, Any] = await self._graphql(
+            _UPDATE_APPOINTMENT_MUTATION,
+            {"id": matched_id, "pm_status": "Cancelled"},
+        )
+
+        result: dict[str, Any] = update_data.get("data", {}).get("updateAppointment", {})
         messages: list[dict[str, str]] = result.get("messages") or []
         if messages:
             error_text = "; ".join(m.get("message", "") for m in messages)
-            raise AppointmentCancellationError(reason=error_text, appointment_id=appointment_id)
+            raise AppointmentCancellationError(
+                reason=error_text, appointment_id=matched_id, patient_id=patient_id
+            )
 
         appointment_data: dict[str, Any] = result.get("appointment") or {}
-        raw_date: str = appointment_data.get("date", "")
-        date_val: dt.date | None = None
-        time_val: dt.time | None = None
-        try:
-            aware_dt = dt.datetime.strptime(raw_date, "%Y-%m-%d %H:%M:%S %z")
-            local_dt = aware_dt.astimezone(self._clinic_tz)
-            date_val = local_dt.date()
-            time_val = local_dt.time().replace(second=0, microsecond=0)
-        except ValueError:
-            pass
-
         return Appointment(
-            appointment_id=str(appointment_data.get("id", appointment_id)),
-            patient_id="",
-            date=date_val,
-            time=time_val,
+            appointment_id=str(appointment_data.get("id", matched_id)),
+            patient_id=patient_id,
+            date=date,
+            time=time,
             status=AppointmentStatus.CANCELLED,
         )
 

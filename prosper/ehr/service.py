@@ -56,18 +56,20 @@ class EHRService(AbstractEHRService):
         logger.info("Appointment created: id={}", appointment.appointment_id)
         return appointment
 
-    async def cancel_appointment(self, appointment_id: str) -> Appointment:
+    async def cancel_appointment(
+        self, patient_id: str, date: dt.date, time: dt.time
+    ) -> Appointment:
         """Cancel an appointment."""
-        logger.info("Cancelling appointment")
+        logger.info(
+            "Cancelling appointment for patient={}, date={}, time={}", patient_id, date, time
+        )
 
         try:
-            appointment = await self._client.cancel_appointment(appointment_id)
+            appointment = await self._client.cancel_appointment(patient_id, date, time)
         except (AppointmentCancellationError, EHRUnavailableError):
             raise
         except Exception as exc:
-            raise AppointmentCancellationError(
-                reason=str(exc), appointment_id=appointment_id
-            ) from exc
+            raise AppointmentCancellationError(reason=str(exc), patient_id=patient_id) from exc
 
         logger.info("Appointment cancelled: id={}", appointment.appointment_id)
         return appointment

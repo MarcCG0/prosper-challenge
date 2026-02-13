@@ -74,11 +74,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         [
             transport.input(),
             rtvi,
-            stt,
+            # stt,
             user_aggregator,
             llm,
             filler,  # Speaks contextual filler phrases during tool execution
-            tts,
+            # tts,
             transport.output(),
             assistant_aggregator,
         ]

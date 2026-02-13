@@ -163,8 +163,8 @@ class TestHandleCreateAppointment:
 
 class TestHandleCancelAppointment:
     @pytest.mark.asyncio
-    async def test_missing_appointment_id_returns_error(self, handlers: ToolHandlers) -> None:
-        params = _make_params({"appointment_id": ""})
+    async def test_missing_fields_returns_error(self, handlers: ToolHandlers) -> None:
+        params = _make_params({"patient_id": "", "date": "2026-06-15", "time": "10:00"})
         await handlers.handle_cancel_appointment(params)
         result = params.result_callback.call_args[0][0]
         assert result["error"] is True
@@ -172,18 +172,18 @@ class TestHandleCancelAppointment:
 
     @pytest.mark.asyncio
     async def test_successful_cancellation(self, handlers: ToolHandlers) -> None:
-        params = _make_params({"appointment_id": "a1"})
+        params = _make_params({"patient_id": "p1", "date": "2026-06-15", "time": "10:00"})
         await handlers.handle_cancel_appointment(params)
         result = params.result_callback.call_args[0][0]
         assert result["success"] is True
-        assert result["appointment_id"] == "a1"
+        assert result["appointment_id"] == "cancelled-1"
 
     @pytest.mark.asyncio
     async def test_ehr_error_returns_error_result(
         self, handlers: ToolHandlers, fake_client: FakeEHRClient
     ) -> None:
         fake_client.cancel_error = EHRUnavailableError("down")
-        params = _make_params({"appointment_id": "a1"})
+        params = _make_params({"patient_id": "p1", "date": "2026-06-15", "time": "10:00"})
         await handlers.handle_cancel_appointment(params)
         result = params.result_callback.call_args[0][0]
         assert result["error"] is True

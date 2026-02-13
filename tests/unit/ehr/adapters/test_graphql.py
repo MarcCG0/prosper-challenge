@@ -268,17 +268,41 @@ class TestCreateAppointment:
 
 
 class TestCancelAppointment:
+    @pytest.fixture
+    def _appointments_response(self) -> dict[str, Any]:
+        """A standard appointments query response with one matching appointment."""
+        return _gql_ok(
+            {
+                "appointments": [
+                    {
+                        "id": "100",
+                        "date": "2026-06-15 14:00:00 +0000",
+                        "pm_status": None,
+                    },
+                    {
+                        "id": "101",
+                        "date": "2026-06-16 18:00:00 +0000",
+                        "pm_status": None,
+                    },
+                ]
+            }
+        )
+
     @pytest.mark.asyncio
-    async def test_parses_cancelled_appointment_with_date(
-        self, client: GraphQLHealthieClient, httpx_mock: HTTPXMock
+    async def test_cancels_matching_appointment(
+        self,
+        client: GraphQLHealthieClient,
+        httpx_mock: HTTPXMock,
+        _appointments_response: dict[str, Any],
     ) -> None:
+        httpx_mock.add_response(json=_appointments_response)
         httpx_mock.add_response(
             json=_gql_ok(
                 {
                     "updateAppointment": {
                         "appointment": {
                             "id": "100",
-                            "date": "2026-09-15 16:00:00 +0200",
+                            "date": "2026-06-15 14:00:00 +0000",
                             "pm_status": "Cancelled",
                         },
                         "messages": None,
@@ -287,39 +311,35 @@ class TestCancelAppointment:
             )
         )
 
-        appt = await client.cancel_appointment("100")
+        # 14:00 UTC = 10:00 EDT (America/New_York, UTC-4 in Jun)
+        appt = await client.cancel_appointment("p1", dt.date(2026, 6, 15), dt.time(10, 0))
 
         assert appt.appointment_id == "100"
-        assert appt.date == dt.date(2026, 9, 15)
-        # 16:00 +0200 = 14:00 UTC = 10:00 EDT (America/New_York, UTC-4 in Sep)
+        assert appt.patient_id == "p1"
+        assert appt.date == dt.date(2026, 6, 15)
         assert appt.time == dt.time(10, 0)
         assert appt.status == AppointmentStatus.CANCELLED
 
     @pytest.mark.asyncio
-    async def test_unparseable_date_yields_none_fields(
-        self, client: GraphQLHealthieClient, httpx_mock: HTTPXMock
+    async def test_no_matching_appointment_raises_error(
+        self,
+        client: GraphQLHealthieClient,
+        httpx_mock: HTTPXMock,
+        _appointments_response: dict[str, Any],
     ) -> None:
-        httpx_mock.add_response(
-            json=_gql_ok(
-                {
-                    "updateAppointment": {
-                        "appointment": {"id": "100", "date": "", "pm_status": "Cancelled"},
-                        "messages": None,
-                    }
-                }
-            )
-        )
+        httpx_mock.add_response(json=_appointments_response)
 
-        appt = await client.cancel_appointment("100")
-
-        assert appt.date is None
-        assert appt.time is None
-        assert appt.status == AppointmentStatus.CANCELLED
+        with pytest.raises(AppointmentCancellationError, match="No appointment found"):
+            await client.cancel_appointment("p1", dt.date(2026, 12, 25), dt.time(9, 0))
 
     @pytest.mark.asyncio
     async def test_api_messages_raise_cancellation_error(
-        self, client: GraphQLHealthieClient, httpx_mock: HTTPXMock
+        self,
+        client: GraphQLHealthieClient,
+        httpx_mock: HTTPXMock,
+        _appointments_response: dict[str, Any],
     ) -> None:
+        httpx_mock.add_response(json=_appointments_response)
         httpx_mock.add_response(
             json=_gql_ok(
                 {
@@ -332,12 +352,16 @@ class TestCancelAppointment:
         )
 
         with pytest.raises(AppointmentCancellationError, match="Not found"):
-            await client.cancel_appointment("999")
+            await client.cancel_appointment("p1", dt.date(2026, 6, 15), dt.time(10, 0))
 
     @pytest.mark.asyncio
     async def test_sends_cancelled_pm_status(
-        self, client: GraphQLHealthieClient, httpx_mock: HTTPXMock
+        self,
+        client: GraphQLHealthieClient,
+        httpx_mock: HTTPXMock,
+        _appointments_response: dict[str, Any],
     ) -> None:
+        httpx_mock.add_response(json=_appointments_response)
         httpx_mock.add_response(
             json=_gql_ok(
                 {
@@ -349,11 +373,12 @@ class TestCancelAppointment:
             )
         )
 
-        await client.cancel_appointment("100")
+        await client.cancel_appointment("p1", dt.date(2026, 6, 15), dt.time(10, 0))
 
         import json
 
-        body: dict[str, Any] = json.loads(httpx_mock.get_requests()[0].content)
+        # Request 0 = appointments query, request 1 = updateAppointment mutation
+        body: dict[str, Any] = json.loads(httpx_mock.get_requests()[1].content)
         assert body["variables"]["pm_status"] == "Cancelled"
 
 

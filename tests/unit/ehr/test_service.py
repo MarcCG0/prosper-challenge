@@ -113,10 +113,10 @@ class TestCancelAppointment:
     async def test_delegates_to_client(
         self, service: EHRService, fake_client: FakeEHRClient
     ) -> None:
-        appt = await service.cancel_appointment("a1")
+        appt = await service.cancel_appointment("p1", dt.date(2026, 6, 15), dt.time(10, 0))
 
         assert appt.status == AppointmentStatus.CANCELLED
-        assert fake_client.cancelled == ["a1"]
+        assert fake_client.cancelled == [("p1", dt.date(2026, 6, 15), dt.time(10, 0))]
 
     @pytest.mark.asyncio
     async def test_wraps_unexpected_error(
@@ -125,18 +125,18 @@ class TestCancelAppointment:
         fake_client.cancel_error = RuntimeError("network")
 
         with pytest.raises(AppointmentCancellationError, match="network"):
-            await service.cancel_appointment("a1")
+            await service.cancel_appointment("p1", dt.date(2026, 6, 15), dt.time(10, 0))
 
     @pytest.mark.asyncio
     async def test_propagates_known_errors(
         self, service: EHRService, fake_client: FakeEHRClient
     ) -> None:
         fake_client.cancel_error = AppointmentCancellationError(
-            reason="already cancelled", appointment_id="a1"
+            reason="already cancelled", patient_id="p1"
         )
 
         with pytest.raises(AppointmentCancellationError, match="already cancelled"):
-            await service.cancel_appointment("a1")
+            await service.cancel_appointment("p1", dt.date(2026, 6, 15), dt.time(10, 0))
 
 
 class TestLifecycle:
