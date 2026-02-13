@@ -76,8 +76,6 @@ uv run bot.py
 
 ## Deployment
 
-### Option 1: Local with uv (recommended)
-
 The easiest way to run the bot. [uv](https://docs.astral.sh/uv/getting-started/installation/) handles virtual environments, dependency resolution, and execution in a single tool — no need to manually manage `venv` or `pip`.
 
 ```bash
