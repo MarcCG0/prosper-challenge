@@ -88,7 +88,7 @@ mutation updateAppointment($id: ID!, $pm_status: String) {
 """
 
 _APPOINTMENTS_QUERY = """
-query appointments($user_id: String, $filter: String) {
+query appointments($user_id: ID, $filter: String) {
   appointments(user_id: $user_id, filter: $filter) {
     id
     date

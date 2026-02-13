@@ -1,8 +1,8 @@
 import datetime as dt
-import re
+from typing import Any
 
 from loguru import logger
-from playwright.async_api import Browser, Page, async_playwright
+from playwright.async_api import Browser, Page, Playwright, Response, async_playwright
 
 from prosper.domain.exceptions import (
     AppointmentCancellationError,
@@ -67,7 +67,7 @@ class PlaywrightHealthieClient:
         self._password = password
         self._base_url = base_url
         self._headless = headless
-        self._playwright = None
+        self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._page: Page | None = None
 
@@ -196,27 +196,14 @@ class PlaywrightHealthieClient:
                 await time_input.press_sequentially(time_12h, delay=30)
             await page.wait_for_timeout(_DATEPICKER_CLOSE_DELAY_MS)
 
-            # Intercept the GraphQL response to capture the appointment ID
-            # that Healthie returns when the UI submits the form.
-            captured_ids: list[str] = []
-
-            async def _on_response(response) -> None:
-                try:
-                    body = await response.json()
-                    appt = (
-                        (body.get("data") or {}).get("createAppointment", {}).get("appointment")
-                    ) or {}
-                    appt_id = appt.get("id")
-                    if appt_id:
-                        captured_ids.append(str(appt_id))
-                except Exception:
-                    pass
-
-            page.on("response", _on_response)
-
             submit_btn = page.locator(_SEL_MODAL_SUBMIT)
             await submit_btn.wait_for(state="visible", timeout=_SUBMIT_TIMEOUT_MS)
-            await submit_btn.click()
+
+            async with page.expect_response(
+                "**/graphql", timeout=_SUBMIT_TIMEOUT_MS
+            ) as response_info:
+                await submit_btn.click()
+            graphql_response: Response = await response_info.value
 
             modal = page.locator(_SEL_APPT_MODAL)
             for _ in range(_MAX_POLL_ATTEMPTS):
@@ -235,18 +222,7 @@ class PlaywrightHealthieClient:
                     patient_id=request.patient_id,
                 )
 
-            page.remove_listener("response", _on_response)
-
-            if captured_ids:
-                appointment_id = captured_ids[0]
-                logger.info("Captured appointment ID {} from GraphQL response", appointment_id)
-            else:
-                appointment_id = "unknown"
-                url_match = re.search(r"/appointments?/(\d+)", page.url)
-                if url_match:
-                    appointment_id = url_match.group(1)
-                if appointment_id == "unknown":
-                    logger.warning("Could not extract appointment ID after creation")
+            appointment_id = await self._parse_appointment_id_from_response(graphql_response)
 
             return Appointment(
                 appointment_id=appointment_id,
@@ -428,6 +404,21 @@ class PlaywrightHealthieClient:
             await page.wait_for_timeout(_SELECT_ARROW_DELAY_MS)
         await input_el.press("Enter")
         await page.wait_for_timeout(_SELECT_OPEN_DELAY_MS)
+
+    async def _parse_appointment_id_from_response(self, response: Response) -> str:
+        """Extract the appointment ID from a createAppointment GraphQL response."""
+        try:
+            body: dict[str, Any] = await response.json()
+            data: dict[str, Any] = body.get("data") or {}
+            create_result: dict[str, Any] = data.get("createAppointment") or {}
+            appt: dict[str, Any] = create_result.get("appointment") or {}
+            appt_id: str | None = appt.get("id")
+            if appt_id:
+                return str(appt_id)
+        except Exception:
+            pass
+        logger.warning("Could not extract appointment ID after creation")
+        return "unknown"
 
     async def _extract_appointment_id_from_modal(self, page: Page) -> str | None:
         """Extract the numeric appointment ID from the open detail modal.
