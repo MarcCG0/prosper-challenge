@@ -95,7 +95,7 @@ uv run bot.py
 
 Open http://localhost:7860 in your browser and click **Connect**.
 
-I ended up not using Docker as something was going wrong when trying to connect to the UI. Due to time limitations I didn't investigate any further.
+I ended up not using Docker as something was going wrong when trying to connect to the UI. Due to time limitations I didn't investigate any further, however the fastapi app was exposed with no problems, but for faster testing I ended up using the cli directly.
 
 
 ## Expectations & Deliverables
