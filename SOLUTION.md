@@ -11,27 +11,43 @@ The bot greets the patient, asks for their name and date of birth, looks them up
 I noticed the starter repo had Playwright already set up for browser automation, but I thought talking to Healthie's GraphQL API directly would be way faster and more reliable. Instead of picking one and throwing the other away, I went with a ports-and-adapters approach so both could coexist behind the same interface.
 
 ```
-bot.py                          Entry point
+bot.py                            Entry point
 prosper/
   agent/
-    shared/
-      fillers.py                Filler phrases for slow tool calls
-      validation.py             Date/time parsing helpers
-    v1/
-      prompts.py                System prompt
-      tools.py                  Tool schemas + handlers
+    fillers.py                    Filler phrases for slow tool calls
+    prompts.py                    System prompt
+    tools.py                      Tool schemas + handlers
   ehr/
-    ports.py                    Interfaces (AbstractEHRService, EHRClientProtocol)
-    service.py                  Business logic on top of the raw client
-    factory.py                  Picks which adapter to use
+    ports.py                      Interfaces (AbstractEHRService, EHRClientProtocol)
+    service.py                    Business logic on top of the raw client
+    factory.py                    Picks which adapter to use
     adapters/
-      graphql.py                Healthie GraphQL API
-      playwright.py             Healthie browser automation
-      fake.py                   In-memory double for tests
+      graphql.py                  Healthie GraphQL API
+      playwright.py               Healthie browser automation
+      fake.py                     In-memory double for tests
+      datetime_helpers.py         Timezone and date/time utilities
+      parsing_helpers.py          Regex parsers for names, DOBs, URLs
   domain/
-    models.py                   Patient, Appointment, AppointmentRequest
-    exceptions.py               EHRError hierarchy
-  config.py                     Pydantic Settings
+    models.py                     Patient, Appointment, AppointmentRequest
+    exceptions.py                 EHRError hierarchy
+  config.py                       Pydantic Settings
+tests/
+  conftest.py                     Shared fixtures (FakeEHRClient, EHRService)
+  unit/
+    agent/
+      test_fillers.py             ToolCallFillerProcessor tests
+      test_tools.py               Tool handler tests
+    ehr/
+      test_service.py             EHRService tests
+      adapters/
+        test_graphql.py           GraphQL client tests (httpx_mock)
+        test_datetime_helpers.py  Date/time helper tests
+        test_parsing_helpers.py   Regex parser tests
+  integration/
+    ehr/
+      adapters/
+        test_graphql_integration.py     GraphQL against real Healthie
+        test_playwright_integration.py  Playwright against real Healthie
 ```
 
 The idea is simple: `domain/` has no idea Healthie exists, `service.py` only talks to the `EHRClientProtocol` interface, and the concrete adapters (`graphql.py`, `playwright.py`, `fake.py`) are the only things that know how to actually reach Healthie. This also means I can test all the business logic with `FakeEHRClient` and never touch the network.
@@ -52,13 +68,13 @@ I went with the prompt approach. The system prompt defines a clear step-by-step 
 
 The downside is that the LLM could theoretically skip steps or call tools in the wrong order -- a state machine would prevent that by construction. But in practice, I found the prompt-based approach handles edge cases much better (patient changes their mind, gives partial info, asks a clarifying question mid-flow). And I added input validation in every tool handler as a safety net: even if the LLM tries to create an appointment with a bad date or without a patient ID, the handler rejects it with a clear error message instead of letting garbage through to Healthie.
 
-### GraphQL as primary, Playwright as fallback
+### Playwright as primary, GraphQL as alternative
 
-The starter code pointed me toward Playwright, but once I found Healthie's GraphQL API, it was a clear win for the default path. A GraphQL call takes ~200-400ms; Playwright needs to launch a browser, navigate pages, fill forms, and wait for UI animations -- we're talking seconds. For a voice agent where every millisecond of silence feels like an eternity, that difference matters a lot.
+The starter code pointed me toward Playwright, so that's the default adapter. It drives a real browser against Healthie's UI -- launching pages, filling forms, clicking buttons. It's slower (seconds per operation due to navigation and UI animations), but it works against any Healthie instance without needing API access.
 
-That said, I kept the Playwright adapter. It was already partly scaffolded, and there's a real scenario where API access might not be available or the API doesn't expose some functionality the UI does. Both adapters implement the same `EHRClientProtocol`, so swapping is just changing the `HEALTHIE_ADAPTER` env var. The factory in `factory.py` handles the rest.
+I also built a GraphQL adapter as an alternative. A GraphQL call takes ~200-400ms compared to Playwright's seconds, so for a voice agent where every millisecond of silence feels like an eternity, it's a significant improvement when available. However, API access might not always be available, and the UI sometimes exposes functionality the API doesn't.
 
-Yes, maintaining two adapters is more work. But I think having a browser-automation fallback for an EHR integration is worth it -- these systems change, and having two paths to the same data is a decent safety net.
+Both adapters implement the same `EHRClientProtocol`, so swapping is just changing the `HEALTHIE_ADAPTER` env var. The factory in `factory.py` handles the rest. Having two paths to the same data is a decent safety net -- these EHR systems change, and if one path breaks, you have the other.
 
 ### DOB filtering happens in the service layer
 
@@ -130,7 +146,6 @@ Two GitHub Actions workflows:
 - **Lint** (`lint.yml`): Ruff for import sorting and formatting via pre-commit.
 - **Test** (`test.yml`): Runs unit tests only -- no credentials needed in CI.
 
-There's also a Dockerfile and docker-compose.yaml for local deployment (`docker compose up`, bot on port 7860).
 
 ## Where I'd go next
 
